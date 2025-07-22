@@ -102,12 +102,12 @@ class OpenAI_Summarizer:
         )
 
         if self.verbose:
-            logger.info(f"TOTAL TOKENS IN DOCUMENT -> {document_length}")
+            logger.info(f"Total tokens in document -> {document_length}")
             logger.info(
-                f"SPLITTING THE TEXT INTO {len(text_chunks)} CHUNKS TO BE SUMMARIZED."
+                f"Splitting the text into {len(text_chunks)} chunks to be summarized."
             )
             logger.info(
-                f"CHUNK LENGTHS ARE {[num_tokens_from_text(x) for x in text_chunks]}"
+                f"Chunk lengths are {[num_tokens_from_text(x) for x in text_chunks]}"
             )
 
         labeled = []

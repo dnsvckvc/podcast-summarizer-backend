@@ -49,7 +49,7 @@ def get_episode_entry(
 
     except Exception as e:
         logger.error(f"Error fetching RSS feed: {e}")
-        raise requests.RequestException(f"Failed to fetch RSS feed: {e}")
+        raise requests.RequestException("Failed to fetch RSS feed")
 
 
 def generate_episode_id(audio_url: str, title: str) -> str:

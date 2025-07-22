@@ -48,12 +48,12 @@ class WhisperTranscriber(Transcriber):
 
         if os.path.exists(transcript_path):
             if self.verbose:
-                logger.info("TRANSCRIPTION ALREADY EXISTS.")
+                logger.info("Transcription already exists.")
             with open(transcript_path, "r", encoding="utf-8") as file:
                 return file.read()
 
         if self.verbose:
-            logger.info("STARTING TRANSCRIPTION...")
+            logger.info("Starting transcription...")
 
         transcribed_text = ""
 
@@ -68,7 +68,7 @@ class WhisperTranscriber(Transcriber):
             if self.verbose:
                 size_mb = os.path.getsize(audio_path) / (1024 * 1024)
                 logger.info(
-                    f"AUDIO FILE EXCEEDS 25MB ({size_mb:.2f} MB), SPLITTING INTO CHUNKS..."
+                    f"Audio file exceeds 25MB ({size_mb:.2f} MB), splitting into chunks..."
                 )
 
             audio = AudioSegment.from_file(audio_path)
@@ -101,7 +101,7 @@ class WhisperTranscriber(Transcriber):
                     transcribed_text += result.text
 
                 if self.verbose:
-                    logger.info(f"PROCESSED CHUNK {i + 1} OF {chunks}")
+                    logger.info(f"Processed chunk {i + 1}. of {chunks}.")
 
                 os.remove(chunk_path)
 

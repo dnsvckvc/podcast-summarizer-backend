@@ -1,5 +1,6 @@
 {
   "transcriber": "salad",
+  "max_workers": 10,
   "whisper": {
     "verbose": true,
     "model": "base",

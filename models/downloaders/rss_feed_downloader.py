@@ -74,8 +74,7 @@ class RSS_Feed_Downloader(Downloader):
             if not hasattr(feed, "entries") or len(feed.entries) == 0:
                 return False
         except Exception as e:
-            if self.verbose:
-                logger.warning(f"RSS feed validation failed: {e}")
+            logger.warning(f"RSS feed validation failed: {e}")
             return False
 
         return True

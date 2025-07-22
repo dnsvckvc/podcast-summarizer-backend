@@ -1,48 +1,41 @@
+from curses import meta
 import os
 import uuid
-import threading
 
 from typing import Dict, Any
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 from flask_cors import CORS, cross_origin
-from task_manager import TaskStatus, TaskManager
-from models.downloaders.yt_downloader import YTDownloader
+from concurrent.futures import ThreadPoolExecutor
+from models.managers.auth_manager import AuthManager
 from utils.validators import URLValidator, InputValidator
-from models.summarizers.openai_summarizer import OpenAI_Summarizer
-from models.transcribers.salad_transcriber import SaladTranscriber
+from flask_jwt_extended import jwt_required, get_jwt, JWTManager
+from models.managers.task_manager import TaskStatus, TaskManager
 from utils.app_utils import load_config, setup_logger, copy_cookies
-from models.transcribers.whisper_transcriber import WhisperTranscriber
-from models.downloaders.rss_feed_downloader import RSS_Feed_Downloader
+
 
 # Load environment variables and configuration
 load_dotenv(override=True)
 config = load_config()
 logger = setup_logger()
-
-# Copy YouTube cookies to temporary location
 copy_cookies(config)
 
 # Initialize components
-task_manager = TaskManager()
+auth_manager = AuthManager()
+task_manager = TaskManager(config)
+executor = ThreadPoolExecutor(max_workers=config.get("max_workers", 5))
 
-# Initialize downloaders
-yt_downloader = YTDownloader(config=config["youtube"])
-rss_downloader = RSS_Feed_Downloader(config=config["rss_feed"])
-
-# Initialize transcribers
-transcriber_type = config.get("transcriber", "salad")
-if transcriber_type == "salad":
-    transcriber = SaladTranscriber(config=config["salad"])
-else:
-    transcriber = WhisperTranscriber(config=config["whisper"])
-
-# Initialize summarizer
-summarizer = OpenAI_Summarizer(config=config["openai"])
 
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app, origins=[os.getenv("FRONTEND_URL", "http://localhost:3000")])
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "secretKey")
+jwt_manager = JWTManager(app)
+VERBOSE = True
+
+
+def _get_jti():
+    return get_jwt()["jti"]
 
 
 def validate_request_data(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -115,57 +108,63 @@ def validate_request_data(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def process_podcast(
-    task_id: str, source_url: str, episode_name: str, detail_level: float, platform: str
+    user_id: str,
+    task_id: str,
+    source_url: str,
+    episode_name: str,
+    detail_level: float,
+    platform: str,
 ) -> None:
-    """
-    Process podcast summarization asynchronously.
-
-    Args:
-        task_id (str): Unique task identifier
-        source_url (str): URL of the podcast source
-        episode_name (str): Name of the episode (for RSS feeds)
-        detail_level (float): Summary detail level (0.0-1.0)
-        platform (str): Platform type ('youtube' or 'rss')
-    """
+    """Downloads, transcribes and summarizes using user-specific context"""
     try:
-        # Select appropriate downloader
-        downloader = yt_downloader if platform == "youtube" else rss_downloader
+        ctx = task_manager.get_user_context(user_id)
+        downloader = ctx.yt_downloader if platform == "youtube" else ctx.rss_downloader
+        transcriber = ctx.transcriber
+        summarizer = ctx.summarizer
 
         # Step 1: Download/Process audio
         task_manager.update_task(
+            user_id,
             task_id,
             status=TaskStatus.DOWNLOADING,
             progress=10.0,
-            message="Processing audio source...",
+            message="Downloading audio...",
         )
-        import json
 
         audio_path, metadata = downloader.download_episode(source_url, episode_name)
-        logger.info(f"Processed audio for: {metadata.get('title', 'Unknown')}")
+
+        if VERBOSE:
+            logger.info(f"Processed audio for: {metadata.get('title', 'Unknown')}")
 
         # Step 2: Transcribe audio
         task_manager.update_task(
+            user_id,
             task_id,
             status=TaskStatus.TRANSCRIBING,
             progress=30.0,
-            message="Transcribing audio to text...",
+            message="Transcribing audio...",
         )
 
         transcription = transcriber.transcribe(
             audio_path=audio_path, video_id=metadata["video_id"]
         )
-        logger.info("Transcription completed successfully")
+
+        if VERBOSE:
+            logger.info("Transcription completed successfully")
 
         # Step 3: Generate summary
         task_manager.update_task(
+            user_id,
             task_id,
             status=TaskStatus.SUMMARIZING,
             progress=70.0,
-            message="Generating AI summary...",
+            message="Generating summary...",
         )
 
         summary = summarizer.summarize(transcription, detail=detail_level)
-        logger.info("Summary generation completed")
+
+        if VERBOSE:
+            logger.info("Summary generation completed")
 
         # Complete the task
         result = {
@@ -175,28 +174,30 @@ def process_podcast(
             "channel": metadata.get("channel", "Unknown Channel"),
             "duration_string": metadata.get("duration_string", "Unknown"),
             "release_date": metadata.get("release_date", "Unknown"),
+            "transcript": transcription,
         }
 
         task_manager.update_task(
+            user_id,
             task_id,
             status=TaskStatus.COMPLETED,
             progress=100.0,
-            message="Summary completed successfully!",
+            message="Done.",
             result=result,
         )
 
-        logger.info(f"Task {task_id} completed successfully")
+        if VERBOSE:
+            logger.info(f"Task {task_id} completed successfully")
 
     except Exception as e:
-        error_message = str(e)
-        logger.exception(f"Error processing task {task_id}: {error_message}")
-
+        logger.exception("Task %s for user %s failed", task_id, user_id)
         task_manager.update_task(
+            user_id,
             task_id,
             status=TaskStatus.FAILED,
             progress=0.0,
-            message="Processing failed",
-            error=error_message,
+            message="Failed",
+            error=str(e),
         )
 
 
@@ -208,7 +209,7 @@ def index():
         jsonify(
             {
                 "message": "Podcast Summarizer API",
-                "version": "2.0.0",
+                "version": "1.2.0",
                 "status": "healthy",
             }
         ),
@@ -216,8 +217,55 @@ def index():
     )
 
 
+@app.route("/api/auth/login", methods=["POST", "OPTIONS"])
+@cross_origin()
+def login():
+    """Authenticate user and return JWT token"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "Request body required"}), 400
+
+        username = data.get("username", "").strip()
+        password = data.get("password", "")
+
+        if not username or not password:
+            return (
+                jsonify({"success": False, "error": "Username and password required"}),
+                400,
+            )
+
+        user_data = auth_manager.authenticate_user(username, password)
+        if not user_data:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "Invalid username or password. Please try again.",
+                    }
+                ),
+                401,
+            )
+
+        token = auth_manager.create_token(username)
+
+        return jsonify(
+            {
+                "success": True,
+                "token": token,
+                "user": {"username": username, "role": user_data["role"]},
+                "message": "Login successful",
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Login error: {str(e)}")
+        return jsonify({"success": False, "error": "Internal server error"}), 500
+
+
 @app.route("/api/validate", methods=["POST"])
 @cross_origin()
+@jwt_required()
 def validate_url():
     """
     Validate URL endpoint for frontend validation.
@@ -288,7 +336,7 @@ def validate_url():
             )
 
     except Exception as e:
-        logger.exception("Error in URL validation")
+        logger.exception(f"Error in URL validation - {e}")
         return (
             jsonify(
                 {"success": False, "error": "Internal server error during validation"}
@@ -299,9 +347,10 @@ def validate_url():
 
 @app.route("/api/summarize", methods=["POST"])
 @cross_origin()
+@jwt_required()
 def summarize_endpoint():
     """
-    Start asynchronous podcast summarization.
+    Start podcast summarization.
 
     Expected JSON:
         {
@@ -328,24 +377,25 @@ def summarize_endpoint():
 
         validated_data = validation_result["data"]
 
+        user_id = _get_jti()  # Use JWT ID as user identifier
         task_id = str(uuid.uuid4())
-        task_manager.create_task(task_id)
 
-        threading.Thread(
-            target=process_podcast,
-            args=(
-                task_id,
-                validated_data["source_url"],
-                validated_data["episode_name"],
-                validated_data["detail_level"],
-                validated_data["platform"],
-            ),
-            daemon=True,
-        ).start()
+        task_manager.create_task(user_id, task_id)
 
-        logger.info(
-            f"Started processing task {task_id} for {validated_data['platform']} content"
+        executor.submit(
+            process_podcast,
+            user_id,
+            task_id,
+            validated_data["source_url"],
+            validated_data["episode_name"],
+            validated_data["detail_level"],
+            validated_data["platform"],
         )
+
+        if VERBOSE:
+            logger.info(
+                f"Started processing task {task_id} for {validated_data['platform']} content"
+            )
 
         return (
             jsonify(
@@ -359,12 +409,13 @@ def summarize_endpoint():
         )
 
     except Exception as e:
-        logger.exception("Error starting summarization task")
+        logger.exception(f"Error starting summarization task - {e}")
         return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
 @app.route("/api/status/<task_id>", methods=["GET"])
 @cross_origin()
+@jwt_required()
 def get_task_status(task_id: str):
     """
     Get current status of a summarization task.
@@ -376,7 +427,7 @@ def get_task_status(task_id: str):
         JSON with task status and progress information
     """
     try:
-        task_info = task_manager.get_task_dict(task_id)
+        task_info = task_manager.get_task_dict(_get_jti(), task_id)
 
         if not task_info:
             return jsonify({"success": False, "error": "Task not found"}), 404
@@ -384,49 +435,7 @@ def get_task_status(task_id: str):
         return jsonify({"success": True, "task": task_info}), 200
 
     except Exception as e:
-        logger.exception(f"Error getting task status for {task_id}")
-        return jsonify({"success": False, "error": "Internal server error"}), 500
-
-
-@app.route("/api/result/<task_id>", methods=["GET"])
-@cross_origin()
-def get_task_result(task_id: str):
-    """
-    Get result of a completed summarization task.
-
-    Args:
-        task_id (str): Task identifier
-
-    Returns:
-        JSON with task result or error information
-    """
-    try:
-        task_info = task_manager.get_task(task_id)
-
-        if not task_info:
-            return jsonify({"success": False, "error": "Task not found"}), 404
-
-        if task_info.status == TaskStatus.COMPLETED:
-            return jsonify({"success": True, "result": task_info.result}), 200
-        elif task_info.status == TaskStatus.FAILED:
-            return (
-                jsonify({"success": False, "error": task_info.error or "Task failed"}),
-                500,
-            )
-        else:
-            return (
-                jsonify(
-                    {
-                        "success": False,
-                        "error": "Task not completed yet",
-                        "status": task_info.status.value,
-                    }
-                ),
-                202,
-            )
-
-    except Exception as e:
-        logger.exception(f"Error getting task result for {task_id}")
+        logger.exception(f"Error getting task status for {task_id} - {e}")
         return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
