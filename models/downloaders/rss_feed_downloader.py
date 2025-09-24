@@ -4,7 +4,7 @@ import logging
 import requests
 import feedparser
 
-from typing import Tuple
+from typing import Tuple, Optional
 from urllib.parse import urlparse
 from models.downloaders.downloader import Downloader
 from models.downloaders.utils.rss_feed_downloader_utils import (
@@ -80,22 +80,21 @@ class RSS_Feed_Downloader(Downloader):
         return True
 
     def download_episode(
-        self, source_url: str, episode_name: str | None
+        self, source_url: str, episode_name: Optional[str]
     ) -> Tuple[str, dict]:
         """
         Process a podcast episode from RSS feed.
 
-        Note: This method doesn't actually download the audio file.
-        Instead, it validates the feed, finds the episode, and returns
-        the direct audio URL along with metadata for transcription.
+        This method downloads the actual audio file to a local path
+        for transcription processing.
 
         Args:
             source_url (str): URL of the RSS feed
-            episode_name (str | None): Name of the episode to process
+            episode_name (Optional[str]): Name of the episode to process
 
         Returns:
             Tuple[str, dict]: A tuple containing:
-                - audio_url (str): Direct URL to the audio file
+                - audio_path (str): Local path to the downloaded audio file
                 - metadata (dict): Episode metadata
 
         Raises:
@@ -137,9 +136,68 @@ class RSS_Feed_Downloader(Downloader):
         metadata["audio_url"] = audio_url
         metadata["source_type"] = "rss"
 
+        # Download the audio file to local storage
+        local_audio_path = self._download_audio_file(audio_url, episode_id)
+
         if self.verbose:
             logger.info(
                 f"Successfully processed RSS episode: {json.dumps(metadata, indent=4)}"
             )
 
-        return audio_url, metadata
+        return local_audio_path, metadata
+
+    def _download_audio_file(self, audio_url: str, episode_id: str) -> str:
+        """
+        Download audio file from URL to local storage.
+        
+        Args:
+            audio_url (str): URL of the audio file
+            episode_id (str): Unique identifier for the episode
+            
+        Returns:
+            str: Local path to the downloaded audio file
+        """
+        import tempfile
+        import urllib.parse
+        
+        # Create a temporary directory for this episode
+        episode_dir = os.path.join(tempfile.gettempdir(), "audio", episode_id)
+        os.makedirs(episode_dir, exist_ok=True)
+        
+        # Determine file extension from URL or default to mp3
+        parsed_url = urllib.parse.urlparse(audio_url)
+        file_ext = os.path.splitext(parsed_url.path)[1] or '.mp3'
+        
+        local_path = os.path.join(episode_dir, f"{episode_id}{file_ext}")
+        
+        # Check if file already exists
+        if os.path.exists(local_path):
+            if self.verbose:
+                logger.info(f"Audio file already exists: {local_path}")
+            return local_path
+        
+        if self.verbose:
+            logger.info(f"Downloading audio from: {audio_url}")
+        
+        # Download the file
+        try:
+            chunk_size = self.config.get("chunk_size", 8192)
+            response = requests.get(audio_url, stream=True, timeout=30)
+            response.raise_for_status()
+            
+            with open(local_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        f.write(chunk)
+            
+            if self.verbose:
+                file_size_mb = os.path.getsize(local_path) / (1024 * 1024)
+                logger.info(f"Downloaded audio file: {local_path} ({file_size_mb:.2f} MB)")
+                
+            return local_path
+            
+        except Exception as e:
+            # Clean up partial download
+            if os.path.exists(local_path):
+                os.remove(local_path)
+            raise requests.RequestException(f"Failed to download audio file: {e}")

@@ -4,7 +4,7 @@ import json
 import shutil
 import logging
 
-from typing import Tuple
+from typing import Tuple, Optional
 from yt_dlp import YoutubeDL
 from models.downloaders.downloader import Downloader
 from models.downloaders.utils.yt_downloader_utils import extract_video_id, load_metadata
@@ -71,14 +71,14 @@ class YTDownloader(Downloader):
         return False
 
     def download_episode(
-        self, source_url: str, episode_name: str | None
+        self, source_url: str, episode_name: Optional[str]
     ) -> Tuple[str, dict]:
         """
         Download YouTube video as audio and extract metadata.
 
         Args:
             source_url (str): YouTube video URL
-            episode_name (str | None): Not used for YouTube (title from metadata)
+            episode_name (Optional[str]): Not used for YouTube (title from metadata)
 
         Returns:
             Tuple[str, dict]: Local audio file path and metadata

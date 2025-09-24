@@ -210,8 +210,8 @@ class SaladTranscriber(Transcriber):
                 json={"parts": etags},
             )
             complete_response.raise_for_status()
-            transcript_url = complete_response.json().get("url")
-            return self._sign_file(transcript_url)
+            # For multipart upload, we need to sign the filename, not the returned URL
+            return self._sign_file(fname)
 
         except requests.RequestException as e:
             logger.error(f"Multipart upload failed: {e}")
@@ -234,9 +234,12 @@ class SaladTranscriber(Transcriber):
             }
         }
 
+        # Choose endpoint based on configuration
+        endpoint = "transcription-lite" if self.config.get("use_lite", True) else "transcribe"
+        
         try:
             response = requests.post(
-                f"{self.config.get('transcript_base_url')}/{SALAD_ORGANIZATION}/inference-endpoints/transcription-lite/jobs",
+                f"{self.config.get('transcript_base_url')}/{SALAD_ORGANIZATION}/inference-endpoints/{endpoint}/jobs",
                 headers={
                     "Salad-Api-Key": SALAD_API_KEY,
                     "Content-Type": "application/json",
@@ -256,7 +259,7 @@ class SaladTranscriber(Transcriber):
             while attempt < max_attempts:
                 try:
                     status_response = requests.get(
-                        f"{self.config.get('transcript_base_url')}/{SALAD_ORGANIZATION}/inference-endpoints/transcription-lite/jobs/{job_id}",
+                        f"{self.config.get('transcript_base_url')}/{SALAD_ORGANIZATION}/inference-endpoints/{endpoint}/jobs/{job_id}",
                         headers={"Salad-Api-Key": SALAD_API_KEY},
                     )
                     status_response.raise_for_status()

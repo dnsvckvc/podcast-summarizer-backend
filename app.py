@@ -114,8 +114,9 @@ def process_podcast(
     episode_name: str,
     detail_level: float,
     platform: str,
+    transcribe_only: bool = False,
 ) -> None:
-    """Downloads, transcribes and summarizes using user-specific context"""
+    """Downloads, transcribes and optionally summarizes using user-specific context"""
     try:
         ctx = task_manager.get_user_context(user_id)
         downloader = ctx.yt_downloader if platform == "youtube" else ctx.rss_downloader
@@ -152,19 +153,24 @@ def process_podcast(
         if VERBOSE:
             logger.info("Transcription completed successfully")
 
-        # Step 3: Generate summary
-        task_manager.update_task(
-            user_id,
-            task_id,
-            status=TaskStatus.SUMMARIZING,
-            progress=70.0,
-            message="Generating summary...",
-        )
+        # Step 3: Generate summary (optional)
+        summary = None
+        if not transcribe_only:
+            task_manager.update_task(
+                user_id,
+                task_id,
+                status=TaskStatus.SUMMARIZING,
+                progress=70.0,
+                message="Generating summary...",
+            )
 
-        summary = summarizer.summarize(transcription, detail=detail_level)
+            summary = summarizer.summarize(transcription, detail=detail_level)
 
-        if VERBOSE:
-            logger.info("Summary generation completed")
+            if VERBOSE:
+                logger.info("Summary generation completed")
+        else:
+            if VERBOSE:
+                logger.info("Skipping summarization (transcribe-only mode)")
 
         # Complete the task
         result = {
@@ -390,6 +396,7 @@ def summarize_endpoint():
             validated_data["episode_name"],
             validated_data["detail_level"],
             validated_data["platform"],
+            False,  # transcribe_only
         )
 
         if VERBOSE:
@@ -410,6 +417,81 @@ def summarize_endpoint():
 
     except Exception as e:
         logger.exception(f"Error starting summarization task - {e}")
+        return jsonify({"success": False, "error": "Internal server error"}), 500
+
+
+@app.route("/api/transcribe", methods=["POST"])
+@cross_origin()
+@jwt_required()
+def transcribe_endpoint():
+    """
+    Start podcast transcription only (no summarization).
+
+    Expected JSON:
+        {
+            "source_url": "string",
+            "episode_name": "string" | null,
+            "platform": "youtube" | "rss"
+        }
+
+    Returns:
+        JSON with task_id for status tracking
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "Request body is required"}), 400
+
+        # Create validation data with default detail_level for transcribe-only
+        validation_data = {
+            **data,
+            "detail_level": 0.5  # Default value, won't be used in transcribe-only
+        }
+
+        validation_result = validate_request_data(validation_data)
+        if not validation_result["valid"]:
+            return (
+                jsonify({"success": False, "errors": validation_result["errors"]}),
+                400,
+            )
+
+        validated_data = validation_result["data"]
+
+        user_id = _get_jti()  # Use JWT ID as user identifier
+        task_id = str(uuid.uuid4())
+
+        task_manager.create_task(user_id, task_id)
+
+        executor.submit(
+            process_podcast,
+            user_id,
+            task_id,
+            validated_data["source_url"],
+            validated_data["episode_name"],
+            0.5,  # Dummy detail level, not used in transcribe-only
+            validated_data["platform"],
+            True,  # transcribe_only
+        )
+
+        if VERBOSE:
+            logger.info(
+                f"Started transcribe-only task {task_id} for {validated_data['platform']} content"
+            )
+
+        return (
+            jsonify(
+                {
+                    "success": True,
+                    "task_id": task_id,
+                    "message": "Transcription started successfully",
+                    "mode": "transcribe_only"
+                }
+            ),
+            202,
+        )
+
+    except Exception as e:
+        logger.exception(f"Error starting transcription task - {e}")
         return jsonify({"success": False, "error": "Internal server error"}), 500
 
 

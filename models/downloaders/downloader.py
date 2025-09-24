@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Optional, Union
 from abc import ABC, abstractmethod
 
 
@@ -12,14 +12,14 @@ class Downloader(ABC):
 
     @abstractmethod
     def download_episode(
-        self, source_url: str, episode_name: str | None
+        self, source_url: str, episode_name: Optional[str]
     ) -> Tuple[str, dict]:
         """
         Download a podcast episode from the given source.
 
         Args:
             source_url (str): The URL of the podcast source
-            episode_name (str | None): Name of the specific episode (if applicable)
+            episode_name (Optional[str]): Name of the specific episode (if applicable)
 
         Returns:
             Tuple[str, dict]: A tuple containing the local file path and metadata

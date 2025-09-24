@@ -1,5 +1,5 @@
 {
-  "transcriber": "salad",
+  "transcriber": "auto",
   "max_workers": 10,
   "whisper": {
     "verbose": true,
@@ -10,6 +10,13 @@
     "downloads_dir": "audio",
     "max_file_size": 26214400
   },
+  "local_whisper": {
+    "verbose": true,
+    "model": "base",
+    "transcription_extension": ".txt",
+    "base_dir": "/tmp",
+    "downloads_dir": "audio"
+  },
   "salad": {
     "verbose": true,
     "storage_base_url": "https://storage-api.salad.com/organizations",
@@ -17,7 +24,8 @@
     "max_direct_upload": 104857600,
     "base_dir": "/tmp",
     "downloads_dir": "audio",
-    "transcription_extension": ".txt"
+    "transcription_extension": ".txt",
+    "use_lite": true
   },
   "youtube": {
     "verbose": true,
@@ -36,6 +44,6 @@
   },
   "openai": {
     "verbose": true,
-    "model": "gpt-4.1"
+    "model": "gpt-4o-mini"
   }
 }
