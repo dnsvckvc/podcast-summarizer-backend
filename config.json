@@ -1,5 +1,5 @@
 {
-  "transcriber": "auto",
+  "transcriber": "salad",
   "max_workers": 10,
   "whisper": {
     "verbose": true,
